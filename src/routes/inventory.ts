@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 
 import { inventoryAdjustments, inventoryItems } from "../data/inventory";
-import { InventoryAdjustmentType, InventoryItem } from "../types/inventory";
+import { releaseInventory, reserveInventory } from "../services/inventory-domain";
 
 const reservationSchema = z.object({
   productId: z.string().min(3),
@@ -23,47 +23,6 @@ const restockSchema = z.object({
   quantity: z.number().int().positive().max(200),
   reason: z.string().min(3).max(200)
 });
-
-function recalculateStockStatus(item: InventoryItem) {
-  if (!item.inventoryTracked) {
-    item.stockStatus = "untracked";
-    return;
-  }
-
-  if (item.availableQuantity <= 0) {
-    item.stockStatus = "out_of_stock";
-    return;
-  }
-
-  if (item.availableQuantity <= item.reorderThreshold) {
-    item.stockStatus = "low_stock";
-    return;
-  }
-
-  item.stockStatus = "in_stock";
-}
-
-function addAdjustment(
-  type: InventoryAdjustmentType,
-  productId: string,
-  quantity: number,
-  orderId: string | null,
-  reason: string
-) {
-  const now = new Date().toISOString();
-  const adjustment = {
-    id: `adj-${Date.now()}`,
-    orderId,
-    productId,
-    quantity,
-    type,
-    reason,
-    createdAt: now
-  };
-
-  inventoryAdjustments.push(adjustment);
-  return adjustment;
-}
 
 export const inventoryRouter = Router();
 
@@ -131,42 +90,24 @@ inventoryRouter.post("/reservations", (request, response) => {
   }
 
   const payload = parsedPayload.data;
-  const item = inventoryItems.find((entry) => entry.productId === payload.productId);
+  try {
+    const { item, adjustment } = reserveInventory(
+      payload.productId,
+      payload.quantity,
+      payload.orderId,
+      payload.reason ?? "Inventory reserved for order."
+    );
 
-  if (!item) {
-    response.status(404).json({ error: "Inventory item not found" });
-    return;
+    response.status(200).json({
+      data: item,
+      meta: {
+        adjustment
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Inventory reservation failed";
+    response.status(message === "Inventory item not found" ? 404 : 409).json({ error: message });
   }
-
-  if (!item.inventoryTracked) {
-    response.status(409).json({ error: "Inventory is not tracked for this product" });
-    return;
-  }
-
-  if (item.availableQuantity < payload.quantity) {
-    response.status(409).json({ error: "Insufficient stock" });
-    return;
-  }
-
-  item.availableQuantity -= payload.quantity;
-  item.reservedQuantity += payload.quantity;
-  item.updatedAt = new Date().toISOString();
-  recalculateStockStatus(item);
-
-  const adjustment = addAdjustment(
-    "reservation",
-    payload.productId,
-    payload.quantity,
-    payload.orderId,
-    payload.reason ?? "Inventory reserved for order."
-  );
-
-  response.status(200).json({
-    data: item,
-    meta: {
-      adjustment
-    }
-  });
 });
 
 inventoryRouter.post("/release", (request, response) => {
@@ -181,42 +122,24 @@ inventoryRouter.post("/release", (request, response) => {
   }
 
   const payload = parsedPayload.data;
-  const item = inventoryItems.find((entry) => entry.productId === payload.productId);
+  try {
+    const { item, adjustment } = releaseInventory(
+      payload.productId,
+      payload.quantity,
+      payload.orderId,
+      payload.reason ?? "Inventory released from order reservation."
+    );
 
-  if (!item) {
-    response.status(404).json({ error: "Inventory item not found" });
-    return;
+    response.status(200).json({
+      data: item,
+      meta: {
+        adjustment
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Inventory release failed";
+    response.status(message === "Inventory item not found" ? 404 : 409).json({ error: message });
   }
-
-  if (!item.inventoryTracked) {
-    response.status(409).json({ error: "Inventory is not tracked for this product" });
-    return;
-  }
-
-  if (item.reservedQuantity < payload.quantity) {
-    response.status(409).json({ error: "Cannot release more stock than is reserved" });
-    return;
-  }
-
-  item.reservedQuantity -= payload.quantity;
-  item.availableQuantity += payload.quantity;
-  item.updatedAt = new Date().toISOString();
-  recalculateStockStatus(item);
-
-  const adjustment = addAdjustment(
-    "release",
-    payload.productId,
-    payload.quantity,
-    payload.orderId,
-    payload.reason ?? "Inventory released from order reservation."
-  );
-
-  response.status(200).json({
-    data: item,
-    meta: {
-      adjustment
-    }
-  });
 });
 
 inventoryRouter.post("/restock", (request, response) => {

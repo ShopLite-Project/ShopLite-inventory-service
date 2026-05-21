@@ -34,3 +34,23 @@ Before Kafka is introduced, the intended integration is direct HTTP from `order-
 npm ci
 npm run dev
 ```
+
+## Kafka Notes
+
+Kafka will later replace some direct service-to-service HTTP calls with events.
+
+- local `docker-compose` is used to run Kafka itself during development
+- Kafka-related code inside this service is only the client logic that talks to the broker
+- `inventory-service` can consume order events and publish inventory outcome events
+
+Simple mental model:
+
+- Docker Compose starts the broker
+- this service listens for relevant events
+- this service reacts by applying inventory logic
+
+For Kubernetes later:
+
+- Kafka brokers run as pods
+- application services also run as pods
+- a Kafka operator can manage the Kafka cluster lifecycle inside Kubernetes
